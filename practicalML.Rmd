@@ -1,0 +1,106 @@
+---
+title: "Practical Machine Learning Assignment"
+author: "hgiang"
+date: "June 15, 2015"
+output: html_document
+---
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. 
+
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: <http://groupware.les.inf.puc-rio.br/har> (see the section on the Weight Lifting Exercise Dataset). 
+
+In this project, the goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants.
+
+The dependent variable or response is the "classe" variable in the training set.
+
+Data Cleaning
+============
+The training and testing datasets used in the analysis may be found as follows:
+
+Training dataset: <https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv>
+
+Testing dataset: <https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv>
+
+
+We begin by loading the required libraries and reading in the training and testing datasets, assigning missing values to entries that are currently 'NA' or blank.
+
+```{r}
+library(RCurl)
+library(caret)
+trainUrl <- getURL('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv',ssl.verifypeer = FALSE)
+trainData <- read.csv(text = trainUrl, header = TRUE, na.strings = c("NA", ""))
+testUrl <- getURL('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv',ssl.verifypeer = FALSE)
+testSet <- read.csv(text = testUrl, header = TRUE, na.strings = c("NA", ""))
+```
+
+Then, the data is cleaned by transforming into all numeric (so that it can later be used with PCA). Columns in the orignal training and testing datasets that are mostly filled with missing values and nearly all zeores are then removed. To do this, count the number of missing values in each column of the full training dataset. We use those sums to create a logical variable for each column of the dataset. The logical variable's value is 'TRUE' if a column has no missing values (i.e. if the colSums = 0). If there are missing values in the column, the logical variable's value corresponding to that column will be 'FALSE'.
+
+Applying the logical variable to the columns of the training and testing datasets will only keep those columns that are complete. 
+```{r}
+# Convert data to all numeric
+for (col in 1: (dim(trainData)[2]-1) )  {
+    if (!is.null(levels(trainData[,col]))) {
+        trainData[,col] = as.numeric(trainData[,col])
+        testSet[,col] = as.numeric(testSet[,col])
+    }
+}
+
+# Remove columns with NA
+goodColumns <- colSums(is.na(trainData)) == 0
+trainData <- trainData[, goodColumns]
+testSet <- testSet[, goodColumns]
+
+# Remove near zeros columns
+nsv <- nearZeroVar(trainData, saveMetrics=T)
+trainData <- data.frame(trainData[,!nsv$nzv])
+testSet <- data.frame(testSet[,!nsv$nzv])
+```
+There are some unrelevant variables that can be removed as they are unlikely to be related to dependent variable.
+```{r}
+remove = c('X', 'user_name', 'raw_timestamp_part_1', 'raw_timestamp_part_2', 'cvtd_timestamp','num_window')
+trainData <- trainData[, -which(names(trainData) %in% remove)]
+testSet <- testSet[ , -which(names(testSet) %in% remove)]
+dim(trainData)
+```
+Data Cleaning
+============
+We pre-process our data using a principal component analysis, leaving out the last column ('classe')
+```{r}
+library(caret)
+set.seed(7589)
+
+preProc <- preProcess(trainData[,-53], method=c("center", "scale", "pca"))
+trainTransformed <- predict(preProc, trainData[,-53])
+testTransformed <- predict(preProc, testSet[,-53])
+trainTransformed$classe <- as.factor(unlist(trainData[53]))
+testTransformed$classe <- as.factor(unlist(testSet[53]))
+```
+
+Prediction Model
+================
+We now split the updated training dataset into a training dataset (70% of the observations) and a validation dataset (30% of the observations). This validation dataset will allow us to perform cross validation when developing our model.
+```{r}
+# Split data for training & CV
+inTrain <- createDataPartition(y=trainTransformed$classe, p = 0.7, list = F)
+training <- trainTransformed[inTrain,]
+cv <- trainTransformed[-inTrain,]
+```
+We performs random forest training on our traning dataset and validate the results on the validataion dataset.
+
+```{r}
+require(randomForest)
+ctrl <- trainControl(allowParallel=T, method="cv", number=4)
+modelFit <- train(training$classe ~ ., method = "rf", data = training, trControl = ctrl)
+pred <- predict(modelFit, cv)
+sum(pred == cv$classe) / nrow(cv)
+```
+Conusion matrix:
+```{r}
+confusionMatrix(cv$classe, pred)$table
+```
+
+Finally, we apply the model to our test set:
+```{r}
+predictions <- predict(modelFit, testTransformed)
+predictions
+```
